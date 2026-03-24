@@ -1,9 +1,16 @@
 from collections.abc import Sequence
 
 from xdsl.context import Context
-from xdsl.dialects import linalg, memref
-from xdsl.dialects.builtin import MemRefType, ModuleOp
+from xdsl.dialects import arith, linalg, memref
+from xdsl.dialects.builtin import (
+    DYNAMIC_INDEX,
+    IndexType,
+    MemRefType,
+    ModuleOp,
+    ShapedType,
+)
 from xdsl.ir import SSAValue
+from xdsl.ir.affine import AffineDimExpr
 from xdsl.passes import ModulePass
 from xdsl.pattern_rewriter import (
     PatternRewriter,
@@ -16,6 +23,74 @@ from xdsl.transforms.loop_nest_lowering_utils import (
     indices_for_map,
     rewrite_linalg_structured_to_loops,
 )
+
+
+def materialize_loop_bound(
+    rewriter: PatternRewriter,
+    insertion_point: InsertPoint,
+    operand: SSAValue,
+    dim_index: int,
+    dim_size: int,
+) -> SSAValue:
+    if not isinstance(operand.type, MemRefType):
+        raise NotImplementedError(
+            "convert-linalg-to-loops requires buffer semantics; "
+            "tensor operands must be bufferized to memrefs before lowering"
+        )
+
+    if dim_size == DYNAMIC_INDEX:
+        dim_index_op = arith.ConstantOp.from_int_and_width(dim_index, IndexType())
+        rewriter.insert_op(dim_index_op, insertion_point)
+
+        dim_op = memref.DimOp.from_source_and_index(operand, dim_index_op.result)
+        rewriter.insert_op(dim_op, insertion_point)
+        return dim_op.result
+
+    const_op = arith.ConstantOp.from_int_and_width(dim_size, IndexType())
+    rewriter.insert_op(const_op, insertion_point)
+    return const_op.result
+
+
+def create_loop_bound(
+    rewriter: PatternRewriter,
+    insertion_point: InsertPoint,
+    op: linalg.LinalgStructuredOperation,
+) -> tuple[SSAValue, ...]:
+    shapes_to_loops = op.get_shapes_to_loops_map()
+
+    needed_positions = tuple(
+        expr.position
+        for expr in shapes_to_loops.results
+        if isinstance(expr, AffineDimExpr)
+    )
+
+    flat_shape_dims: list[tuple[SSAValue, int, int]] = []
+
+    for operand in op.operands:
+        operand_type = operand.type
+
+        if isinstance(operand_type, ShapedType) and not isinstance(
+            operand_type, MemRefType
+        ):
+            raise NotImplementedError(
+                "convert-linalg-to-loops requires buffer semantics; "
+                "tensor operands must be bufferized to memrefs before lowering"
+            )
+
+        if not isinstance(operand_type, MemRefType):
+            continue
+
+        for dim_index, dim_size in enumerate(operand_type.get_shape()):
+            flat_shape_dims.append((operand, dim_index, dim_size))
+
+    return tuple(
+        materialize_loop_bound(
+            rewriter,
+            insertion_point,
+            *flat_shape_dims[position],
+        )
+        for position in needed_positions
+    )
 
 
 class LowerLinalgStructuredOpPattern(RewritePattern):
@@ -65,10 +140,11 @@ class LowerLinalgStructuredOpPattern(RewritePattern):
             rewriter.insert_op(store_op, insertion_target)
             return store_op
 
+        insertion_point = InsertPoint.before(op)
         rewrite_linalg_structured_to_loops(
             rewriter,
-            InsertPoint.before(op),
-            op.get_static_loop_ranges(),
+            insertion_point,
+            create_loop_bound(rewriter, insertion_point, op),
             op.get_indexing_maps().data,
             op.get_indexing_maps().data[-len(op.outputs) :],
             op.operands,

@@ -216,7 +216,7 @@ def _insert_store_ops(
 def rewrite_linalg_structured_to_loops(
     rewriter: PatternRewriter,
     insertion_point: InsertPoint,
-    ubs: Sequence[int],
+    ubs: Sequence[int | SSAValue],
     load_indexing_maps: Sequence[AffineMapAttr],
     store_indexing_maps: Sequence[AffineMapAttr],
     load_operands: Sequence[SSAValue],
@@ -228,16 +228,19 @@ def rewrite_linalg_structured_to_loops(
     # Create loop nest lb (0), step (1), and ubs
     # ubs are calculated from affine maps and memref dimensions
 
-    bound_constant_ops = tuple(
-        arith.ConstantOp(IntegerAttr.from_index_int_value(ub)) for ub in ubs
-    )
-    rewriter.insert_op(bound_constant_ops)
-    bound_constant_values = tuple(op.result for op in bound_constant_ops)
+    bound_values: list[SSAValue] = []
+    for ub in ubs:
+        if isinstance(ub, SSAValue):
+            bound_values.append(ub)
+        else:
+            bound_constant_op = arith.ConstantOp(IntegerAttr.from_index_int_value(ub))
+            rewriter.insert_op(bound_constant_op, insertion_point)
+            bound_values.append(bound_constant_op.result)
 
     zero_op = arith.ConstantOp(IntegerAttr.from_index_int_value(0))
     one_op = arith.ConstantOp(IntegerAttr.from_index_int_value(1))
-    if bound_constant_values:
-        rewriter.insert_op((zero_op, one_op))
+    if bound_values:
+        rewriter.insert_op((zero_op, one_op), insertion_point)
 
     def make_body(
         rewriter: PatternRewriter,
@@ -286,7 +289,7 @@ def rewrite_linalg_structured_to_loops(
         insertion_point,
         zero_op,
         one_op,
-        bound_constant_values,
+        bound_values,
         (),
         make_body,
     )
