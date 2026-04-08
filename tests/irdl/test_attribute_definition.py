@@ -26,10 +26,10 @@ from xdsl.dialects.builtin import (
     i32,
 )
 from xdsl.dialects.test import Test
+from xdsl.dialects.utils import BitEnumAttribute
 from xdsl.ir import (
     Attribute,
     AttributeInvT,
-    BitEnumAttribute,
     BuiltinAttribute,
     Data,
     EnumAttribute,
@@ -319,6 +319,35 @@ def test_bit_enum_attribute_with_no_none_value(
     ctx.register_dialect("test", lambda: Test)
     ctx.load_attr_or_type(BitEnumNoNoneData)
     assert Parser(ctx, output).parse_attribute() == attr
+
+
+Ty = TypeVar("Ty", bound=StrEnum)
+
+
+def test_enum_illegal_subclass():
+    with pytest.raises(TypeError) as excinfo:
+
+        class EnumParent(EnumAttribute[Ty]):
+            name = "test.bitenum"
+
+        EnumParent(TestEnum.Yes)
+
+    assert "Only direct inheritance from EnumAttribute is allowed." in str(
+        excinfo.value
+    )
+
+
+def test_bit_enum_illegal_subclass():
+    with pytest.raises(TypeError) as excinfo:
+
+        class BitEnumParent(BitEnumAttribute[Ty]):
+            name = "test.bitenum"
+
+        BitEnumParent(TestEnum.Yes)
+
+    assert "Only direct inheritance from BitEnumAttribute is allowed." in str(
+        excinfo.value
+    )
 
 
 ################################################################################
