@@ -14,8 +14,6 @@ from collections.abc import Sequence
 from xdsl.dialects.builtin import (
     I1,
     ArrayAttr,
-    BoolAttr,
-    DenseArrayBase,
     IndexType,
     IntegerType,
     UnitAttr,
@@ -34,6 +32,7 @@ from xdsl.ir import (
 from xdsl.irdl import (
     AttrSizedOperandSegments,
     IRDLOperation,
+    ParsePropInAttrDict,
     irdl_attr_definition,
     irdl_op_definition,
     lazy_traits_def,
@@ -42,7 +41,16 @@ from xdsl.irdl import (
     region_def,
     var_operand_def,
 )
-from xdsl.parser import AttrParser
+from xdsl.irdl.declarative_assembly_format import (
+    AttributeVariable,
+    CustomDirective,
+    ParsingState,
+    PrintingState,
+    TypeDirective,
+    VariadicOperandVariable,
+    irdl_custom_directive,
+)
+from xdsl.parser import AttrParser, Parser, UnresolvedOperand
 from xdsl.printer import Printer
 from xdsl.traits import (
     HasParent,
@@ -51,6 +59,7 @@ from xdsl.traits import (
     RecursiveMemoryEffect,
     SingleBlockImplicitTerminator,
 )
+from xdsl.utils.hints import isa
 
 
 class DeviceType(StrEnum):
@@ -100,6 +109,112 @@ class ClauseDefaultValueAttr(
     name = "acc.defaultvalue"
 
 
+def _parse_device_type_attr(parser: Parser) -> DeviceTypeAttr:
+    """Parse a single `#acc.device_type<...>` attribute."""
+    attr = parser.parse_attribute()
+    if not isinstance(attr, DeviceTypeAttr):
+        parser.raise_error("expected #acc.device_type attribute")
+    return attr
+
+
+def _parse_optional_device_type_suffix(parser: Parser) -> DeviceTypeAttr:
+    """Parse an optional `[ #acc.device_type<...> ]`, defaulting to `#none`."""
+    if parser.parse_optional_punctuation("[") is None:
+        return DeviceTypeAttr(DeviceType.NONE)
+    dt = _parse_device_type_attr(parser)
+    parser.parse_punctuation("]")
+    return dt
+
+
+def _parse_typed_operand(parser: Parser) -> tuple[UnresolvedOperand, Attribute]:
+    """Parse `%v : <type>` and return `(operand, type)`."""
+    operand = parser.parse_unresolved_operand()
+    parser.parse_punctuation(":")
+    return operand, parser.parse_type()
+
+
+def _parse_operand_with_dt(
+    parser: Parser,
+) -> tuple[UnresolvedOperand, Attribute, DeviceTypeAttr]:
+    """Parse `%v : <type> ( `[` #acc.device_type<...> `]` )?`."""
+    operand, ty = _parse_typed_operand(parser)
+    return operand, ty, _parse_optional_device_type_suffix(parser)
+
+
+def _print_device_type_suffix(printer: Printer, dt: Attribute) -> None:
+    """Print ` [#acc.device_type<...>]` unless the device type is `#none`."""
+    if isinstance(dt, DeviceTypeAttr) and dt.data == DeviceType.NONE:
+        return
+    printer.print_string(" [")
+    printer.print_attribute(dt)
+    printer.print_string("]")
+
+
+def _print_typed_operand(printer: Printer, operand: SSAValue) -> None:
+    """Print `%v : <type>`."""
+    printer.print_ssa_value(operand)
+    printer.print_string(" : ")
+    printer.print_attribute(operand.type)
+
+
+def _print_operand_with_dt(printer: Printer, operand: SSAValue, dt: Attribute) -> None:
+    """Print `%v : <type> ( [#acc.device_type<...>] )?`."""
+    _print_typed_operand(printer, operand)
+    _print_device_type_suffix(printer, dt)
+
+
+@irdl_custom_directive
+class DeviceTypeOperands(CustomDirective):
+    """Port of upstream `custom<DeviceTypeOperands>`.
+
+    Syntax inside the enclosing `(`...`)`:
+      `%op : type ( `[` #acc.device_type<...> `]` )?` (`,` ...)*
+    """
+
+    operands: VariadicOperandVariable
+    operand_types: TypeDirective
+    device_types: AttributeVariable
+
+    def is_anchorable(self) -> bool:
+        return True
+
+    def is_optional_like(self) -> bool:
+        return True
+
+    def is_present(self, op: IRDLOperation) -> bool:
+        return bool(self.operands.get(op))
+
+    def set_empty(self, state: ParsingState) -> None:
+        self.operands.set(state, ())
+        self.operand_types.set(state, ())
+
+    def parse(self, parser: Parser, state: ParsingState) -> bool:
+        triples = parser.parse_comma_separated_list(
+            parser.Delimiter.NONE, lambda: _parse_operand_with_dt(parser)
+        )
+        operands, types, device_types = zip(*triples)
+        self.operands.set(state, operands)
+        self.operand_types.set(state, types)
+        self.device_types.set(state, ArrayAttr(device_types))
+        return True
+
+    def print(self, printer: Printer, state: PrintingState, op: IRDLOperation) -> None:
+        operands = self.operands.get(op)
+        if not operands:
+            return
+        dts = (
+            attr.data
+            if isa(attr := self.device_types.get(op), ArrayAttr)
+            else (DeviceTypeAttr(DeviceType.NONE),) * len(operands)
+        )
+        printer.print_list(
+            zip(operands, dts, strict=True),
+            lambda pair: _print_operand_with_dt(printer, pair[0], pair[1]),
+        )
+        state.should_emit_space = True
+        state.last_was_punctuation = False
+
+
 @irdl_op_definition
 class ParallelOp(IRDLOperation):
     """
@@ -125,17 +240,10 @@ class ParallelOp(IRDLOperation):
         ArrayAttr[DeviceTypeAttr], prop_name="asyncOperandsDeviceType"
     )
     async_only = opt_prop_def(ArrayAttr[DeviceTypeAttr], prop_name="asyncOnly")
-    wait_operands_segments = opt_prop_def(
-        DenseArrayBase.constr(IntegerType(32)), prop_name="waitOperandsSegments"
-    )
     wait_operands_device_type = opt_prop_def(
         ArrayAttr[DeviceTypeAttr], prop_name="waitOperandsDeviceType"
     )
-    has_wait_devnum = opt_prop_def(ArrayAttr[BoolAttr], prop_name="hasWaitDevnum")
     wait_only = opt_prop_def(ArrayAttr[DeviceTypeAttr], prop_name="waitOnly")
-    num_gangs_segments = opt_prop_def(
-        DenseArrayBase.constr(IntegerType(32)), prop_name="numGangsSegments"
-    )
     num_gangs_device_type = opt_prop_def(
         ArrayAttr[DeviceTypeAttr], prop_name="numGangsDeviceType"
     )
@@ -151,7 +259,35 @@ class ParallelOp(IRDLOperation):
 
     region = region_def("single_block")
 
-    irdl_options = (AttrSizedOperandSegments(as_property=True),)
+    irdl_options = (
+        AttrSizedOperandSegments(as_property=True),
+        ParsePropInAttrDict(),
+    )
+
+    custom_directives = (DeviceTypeOperands,)
+
+    assembly_format = (
+        "(`combined` `(` `loop` `)` $combined^)?"
+        " (`dataOperands` `(` $data_clause_operands^ `:`"
+        " type($data_clause_operands) `)`)?"
+        " (`async` `(` custom<DeviceTypeOperands>($async_operands,"
+        " type($async_operands), $asyncOperandsDeviceType)^ `)`)?"
+        " (`firstprivate` `(` $firstprivate_operands^ `:`"
+        " type($firstprivate_operands) `)`)?"
+        " (`num_gangs` `(` $num_gangs^ `:` type($num_gangs) `)`)?"
+        " (`num_workers` `(` custom<DeviceTypeOperands>($num_workers,"
+        " type($num_workers), $numWorkersDeviceType)^ `)`)?"
+        " (`private` `(` $private_operands^ `:`"
+        " type($private_operands) `)`)?"
+        " (`vector_length` `(` custom<DeviceTypeOperands>($vector_length,"
+        " type($vector_length), $vectorLengthDeviceType)^ `)`)?"
+        " (`wait` `(` $wait_operands^ `:` type($wait_operands) `)`)?"
+        " (`self` `(` $self_cond^ `)`)?"
+        " (`if` `(` $if_cond^ `)`)?"
+        " (`reduction` `(` $reduction_operands^ `:`"
+        " type($reduction_operands) `)`)?"
+        " $region attr-dict-with-keyword"
+    )
 
     traits = lazy_traits_def(
         lambda: (
@@ -177,11 +313,8 @@ class ParallelOp(IRDLOperation):
         data_clause_operands: Sequence[SSAValue | Operation] = (),
         async_operands_device_type: ArrayAttr[DeviceTypeAttr] | None = None,
         async_only: ArrayAttr[DeviceTypeAttr] | None = None,
-        wait_operands_segments: DenseArrayBase | None = None,
         wait_operands_device_type: ArrayAttr[DeviceTypeAttr] | None = None,
-        has_wait_devnum: ArrayAttr[BoolAttr] | None = None,
         wait_only: ArrayAttr[DeviceTypeAttr] | None = None,
-        num_gangs_segments: DenseArrayBase | None = None,
         num_gangs_device_type: ArrayAttr[DeviceTypeAttr] | None = None,
         num_workers_device_type: ArrayAttr[DeviceTypeAttr] | None = None,
         vector_length_device_type: ArrayAttr[DeviceTypeAttr] | None = None,
@@ -221,11 +354,8 @@ class ParallelOp(IRDLOperation):
             properties={
                 "asyncOperandsDeviceType": async_operands_device_type,
                 "asyncOnly": async_only,
-                "waitOperandsSegments": wait_operands_segments,
                 "waitOperandsDeviceType": wait_operands_device_type,
-                "hasWaitDevnum": has_wait_devnum,
                 "waitOnly": wait_only,
-                "numGangsSegments": num_gangs_segments,
                 "numGangsDeviceType": num_gangs_device_type,
                 "numWorkersDeviceType": num_workers_device_type,
                 "vectorLengthDeviceType": vector_length_device_type,
