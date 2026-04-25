@@ -2,10 +2,13 @@
 Test the usage of the acc (OpenACC) dialect.
 """
 
+import io
+
 from xdsl.dialects import acc
 from xdsl.dialects.arith import ConstantOp
 from xdsl.dialects.builtin import (
     ArrayAttr,
+    DenseArrayBase,
     MemRefType,
     UnitAttr,
     f32,
@@ -14,6 +17,7 @@ from xdsl.dialects.builtin import (
 )
 from xdsl.dialects.test import TestOp
 from xdsl.ir import Block, Region
+from xdsl.printer import Printer
 
 
 def _empty_parallel() -> acc.ParallelOp:
@@ -49,6 +53,12 @@ def test_parallel_empty_verifies():
     assert op.default_attr is None
     assert op.combined is None
     assert isinstance(op.region.block.last_op, acc.YieldOp)
+
+    # The optional num_gangs clause is anchored on `is_present`, so an empty
+    # op should never emit it (covers NumGangs.print's empty-operands guard).
+    out = io.StringIO()
+    Printer(stream=out).print_op(op)
+    assert "num_gangs" not in out.getvalue()
 
 
 def test_parallel_with_operands_verifies():
@@ -100,6 +110,46 @@ def test_parallel_accepts_device_type_attrs():
     assert op.num_gangs_device_type == ArrayAttr([nvidia])
     assert op.num_workers_device_type == ArrayAttr([nvidia])
     assert op.vector_length_device_type == ArrayAttr([nvidia])
+
+
+def test_parallel_num_gangs_segments():
+    """num_gangs_segments rides through as an i32 DenseArrayBase property."""
+    nvidia = acc.DeviceTypeAttr(acc.DeviceType.NVIDIA)
+    default = acc.DeviceTypeAttr(acc.DeviceType.DEFAULT)
+    a = ConstantOp.from_int_and_width(1, i32)
+    b = ConstantOp.from_int_and_width(2, i32)
+    c = ConstantOp.from_int_and_width(3, i32)
+
+    op = acc.ParallelOp(
+        region=Region(Block([acc.YieldOp()])),
+        num_gangs=[a.result, b.result, c.result],
+        num_gangs_device_type=ArrayAttr([default, nvidia]),
+        num_gangs_segments=DenseArrayBase.from_list(i32, [1, 2]),
+    )
+    op.verify()
+
+    assert op.num_gangs_device_type == ArrayAttr([default, nvidia])
+    segments = op.num_gangs_segments
+    assert isinstance(segments, DenseArrayBase)
+    assert segments.get_values() == (1, 2)
+
+
+def test_parallel_num_gangs_print_without_segments_or_dt():
+    """NumGangs.print falls back to a single #none group when DT/segments are unset."""
+    a = ConstantOp.from_int_and_width(1, i32)
+    b = ConstantOp.from_int_and_width(2, i32)
+
+    op = acc.ParallelOp(
+        region=Region(Block([acc.YieldOp()])),
+        num_gangs=[a.result, b.result],
+    )
+    op.verify()
+    assert op.num_gangs_device_type is None
+    assert op.num_gangs_segments is None
+
+    out = io.StringIO()
+    Printer(stream=out).print_op(op)
+    assert "num_gangs({%0 : i32, %1 : i32})" in out.getvalue()
 
 
 def test_parallel_unit_and_default_attrs():
