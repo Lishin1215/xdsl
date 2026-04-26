@@ -32,7 +32,6 @@ from xdsl.dialects.utils import (
 from xdsl.ir import (
     Attribute,
     BlockArgument,
-    Dialect,
     EnumAttribute,
     Region,
     SSAValue,
@@ -1916,39 +1915,3 @@ class ReduceOp(IRDLOperation):
             region,
         )
         return reduction
-
-
-Linalg = Dialect(
-    "linalg",
-    [
-        GenericOp,
-        YieldOp,
-        IndexOp,
-        AddOp,
-        ExpOp,
-        LogOp,
-        SubOp,
-        SqrtOp,
-        SelectOp,
-        FillOp,
-        CopyOp,
-        MaxOp,
-        MinOp,
-        MulOp,
-        TransposeOp,
-        MatmulOp,
-        QuantizedMatmulOp,
-        PoolingNchwMaxOp,
-        Conv2DNchwFchwOp,
-        Conv2DNhwgcGfhwcOp,
-        Conv2DNhwc_HwcfOp,
-        Conv2DNgchwGfchwOp,
-        Conv2DNgchwFgchwOp,
-        Conv2DNhwc_FhwcOp,
-        BroadcastOp,
-        ReduceOp,
-    ],
-    [
-        IteratorTypeAttr,
-    ],
-)
