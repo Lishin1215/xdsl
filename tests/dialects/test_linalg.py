@@ -37,7 +37,7 @@ def test_linalg_on_memrefs():
             AffineMapAttr(indexing_map),
         ]
 
-        iterators = [linalg.ops.IteratorTypeAttr(linalg.ops.IteratorType.PARALLEL)]
+        iterators = [linalg.attrs.IteratorTypeAttr(linalg.attrs.IteratorType.PARALLEL)]
 
         linalg.ops.GenericOp(inputs, outputs, body, indexing_maps, iterators)
 
@@ -76,9 +76,9 @@ def test_loop_range_methods():
         AffineMapAttr(AffineMap(3, 0, (i, j))),
     ]
     iterators = [
-        linalg.ops.IteratorTypeAttr(linalg.ops.IteratorType.PARALLEL),
-        linalg.ops.IteratorTypeAttr(linalg.ops.IteratorType.PARALLEL),
-        linalg.ops.IteratorTypeAttr(linalg.ops.IteratorType.PARALLEL),
+        linalg.attrs.IteratorTypeAttr(linalg.attrs.IteratorType.PARALLEL),
+        linalg.attrs.IteratorTypeAttr(linalg.attrs.IteratorType.PARALLEL),
+        linalg.attrs.IteratorTypeAttr(linalg.attrs.IteratorType.PARALLEL),
     ]
 
     op = linalg.ops.GenericOp(
@@ -114,14 +114,14 @@ def test_get_loop_bound_sources_dynamic_memref():
             AffineMapAttr(AffineMap(2, 0, (i, j))),
         ],
         [
-            linalg.ops.IteratorTypeAttr(linalg.ops.IteratorType.PARALLEL),
-            linalg.ops.IteratorTypeAttr(linalg.ops.IteratorType.PARALLEL),
+            linalg.attrs.IteratorTypeAttr(linalg.attrs.IteratorType.PARALLEL),
+            linalg.attrs.IteratorTypeAttr(linalg.attrs.IteratorType.PARALLEL),
         ],
     )
 
     assert op.get_loop_bound_sources() == (
-        linalg.ops.LoopBoundSource(lhs, 0, DYNAMIC_INDEX),
-        linalg.ops.LoopBoundSource(lhs, 1, 4),
+        linalg.abstract_ops.LoopBoundSource(lhs, 0, DYNAMIC_INDEX),
+        linalg.abstract_ops.LoopBoundSource(lhs, 1, 4),
     )
 
 
@@ -150,14 +150,14 @@ def test_get_loop_bound_sources_skips_scalar_operand():
             AffineMapAttr(AffineMap(2, 0, (i, j))),
         ],
         [
-            linalg.ops.IteratorTypeAttr(linalg.ops.IteratorType.PARALLEL),
-            linalg.ops.IteratorTypeAttr(linalg.ops.IteratorType.PARALLEL),
+            linalg.attrs.IteratorTypeAttr(linalg.attrs.IteratorType.PARALLEL),
+            linalg.attrs.IteratorTypeAttr(linalg.attrs.IteratorType.PARALLEL),
         ],
     )
 
     assert op.get_loop_bound_sources() == (
-        linalg.ops.LoopBoundSource(tensor_operand, 0, 7),
-        linalg.ops.LoopBoundSource(tensor_operand, 1, 3),
+        linalg.abstract_ops.LoopBoundSource(tensor_operand, 0, 7),
+        linalg.abstract_ops.LoopBoundSource(tensor_operand, 1, 3),
     )
 
 
@@ -169,3 +169,19 @@ def test_deprecated_top_level_linalg_api_still_works():
         generic_op = linalg.GenericOp
 
     assert generic_op is linalg.ops.GenericOp
+
+    with pytest.warns(
+        DeprecationWarning,
+        match="Importing 'IteratorTypeAttr' directly from 'xdsl.dialects.linalg' is deprecated",
+    ):
+        iterator_type_attr = linalg.IteratorTypeAttr
+
+    assert iterator_type_attr is linalg.attrs.IteratorTypeAttr
+
+    with pytest.warns(
+        DeprecationWarning,
+        match="Importing 'LinalgStructuredOperation' directly from 'xdsl.dialects.linalg' is deprecated",
+    ):
+        structured_op = linalg.LinalgStructuredOperation
+
+    assert structured_op is linalg.abstract_ops.LinalgStructuredOperation

@@ -15,7 +15,7 @@ from xdsl.pattern_rewriter import (
 class GeneralizeNamedOpPattern(RewritePattern):
     @op_type_rewrite_pattern
     def match_and_rewrite(
-        self, op: linalg.ops.NamedOperation, rewriter: PatternRewriter
+        self, op: linalg.abstract_ops.NamedOperation, rewriter: PatternRewriter
     ) -> None:
         """
         Rewrite a named linalg op to `linalg.generic`.

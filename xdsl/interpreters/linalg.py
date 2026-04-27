@@ -17,12 +17,12 @@ from xdsl.interpreters.shaped_array import ShapedArray
 
 def run_linalg_structured_op(
     interpreter: Interpreter,
-    op: linalg.ops.LinalgStructuredOperation,
+    op: linalg.abstract_ops.LinalgStructuredOperation,
     args: tuple[ShapedArray[float] | float, ...],
 ):
     """
     Helper function for interpreting ops inheriting from
-    [`LinalgStructuredOperation`][xdsl.dialects.linalg.ops.LinalgStructuredOperation].
+    [`LinalgStructuredOperation`][xdsl.dialects.linalg.abstract_ops.LinalgStructuredOperation].
     """
     body = op.body
     inputs_count = len(op.inputs)

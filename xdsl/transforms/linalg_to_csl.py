@@ -48,7 +48,7 @@ def get_scalar_const(op: SSAValue) -> FloatAttr | IntegerAttr | None:
 
 
 def transform_op(
-    op: linalg.ops.NamedOperation,
+    op: linalg.abstract_ops.NamedOperation,
     rewriter: PatternRewriter,
     f16: type[csl.BuiltinDsdOp],
     f32: type[csl.BuiltinDsdOp],

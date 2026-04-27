@@ -12,14 +12,14 @@ from xdsl.pattern_rewriter import (
 
 
 def iterator_type_attr(
-    t: linalg.ops.IteratorTypeAttr,
+    t: linalg.attrs.IteratorTypeAttr,
 ) -> memref_stream.IteratorTypeAttr:
     match t.data:
-        case linalg.ops.IteratorType.PARALLEL:
+        case linalg.attrs.IteratorType.PARALLEL:
             return memref_stream.IteratorTypeAttr.parallel()
-        case linalg.ops.IteratorType.REDUCTION:
+        case linalg.attrs.IteratorType.REDUCTION:
             return memref_stream.IteratorTypeAttr.reduction()
-        case linalg.ops.IteratorType.WINDOW:
+        case linalg.attrs.IteratorType.WINDOW:
             raise NotImplementedError("Cannot convert window iterator type")
 
 

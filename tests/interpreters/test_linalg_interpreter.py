@@ -72,9 +72,9 @@ def test_linalg_generic():
             ),
         ),
         (
-            linalg.ops.IteratorTypeAttr.parallel(),
-            linalg.ops.IteratorTypeAttr.parallel(),
-            linalg.ops.IteratorTypeAttr.parallel(),
+            linalg.attrs.IteratorTypeAttr.parallel(),
+            linalg.attrs.IteratorTypeAttr.parallel(),
+            linalg.attrs.IteratorTypeAttr.parallel(),
         ),
     )
 
@@ -137,9 +137,9 @@ def test_linalg_generic_scalar():
             ),
         ),
         (
-            linalg.ops.IteratorTypeAttr.parallel(),
-            linalg.ops.IteratorTypeAttr.parallel(),
-            linalg.ops.IteratorTypeAttr.parallel(),
+            linalg.attrs.IteratorTypeAttr.parallel(),
+            linalg.attrs.IteratorTypeAttr.parallel(),
+            linalg.attrs.IteratorTypeAttr.parallel(),
         ),
     )
 
@@ -173,7 +173,7 @@ def test_linalg_generic_reduction():
             AffineMapAttr(AffineMap.identity(1)),
             AffineMapAttr(AffineMap.from_callable(lambda d0: ())),
         ),
-        (linalg.ops.IteratorTypeAttr.reduction(),),
+        (linalg.attrs.IteratorTypeAttr.reduction(),),
     )
 
     with ImplicitBuilder(op.body) as (lhs, rhs, acc):

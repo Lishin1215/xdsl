@@ -2,21 +2,25 @@ import warnings
 
 from xdsl.ir import Dialect
 
-from . import ops
+from . import abstract_ops, attrs, ops
+
+_DEPRECATED_SUBMODULES = (attrs, abstract_ops, ops)
 
 
 def __getattr__(name: str):
-    # Check if the requested attribute exists in the new ops module
-    if hasattr(ops, name):
+    # Check if the requested attribute exists in the new submodules.
+    for module in _DEPRECATED_SUBMODULES:
+        if not hasattr(module, name):
+            continue
         warnings.warn(
             f"Importing '{name}' directly from 'xdsl.dialects.linalg' is deprecated. "
-            f"Please use 'from xdsl.dialects.linalg.ops import {name}' instead.",
+            f"Please use 'from xdsl.dialects.linalg.{module.__name__.split('.')[-1]} import {name}' instead.",
             DeprecationWarning,
             stacklevel=2,
         )
-        return getattr(ops, name)
+        return getattr(module, name)
 
-    # If it's not in ops, raise the standard AttributeError
+    # If it's not in any split module, raise the standard AttributeError
     raise AttributeError(f"module '{__name__}' has no attribute '{name}'")
 
 
@@ -51,6 +55,6 @@ Linalg = Dialect(
         ops.ReduceOp,
     ],
     [
-        ops.IteratorTypeAttr,
+        attrs.IteratorTypeAttr,
     ],
 )

@@ -126,9 +126,9 @@ def _(
                 AffineMapAttr(AffineMap.from_callable(lambda m, n, k: (m, n))),
             ),
             iterator_types=(
-                linalg.ops.IteratorTypeAttr.parallel(),
-                linalg.ops.IteratorTypeAttr.parallel(),
-                linalg.ops.IteratorTypeAttr.reduction(),
+                linalg.attrs.IteratorTypeAttr.parallel(),
+                linalg.attrs.IteratorTypeAttr.parallel(),
+                linalg.attrs.IteratorTypeAttr.reduction(),
             )
         )
         with ImplicitBuilder(body) as (a_val, b_val, acc_old_val):
