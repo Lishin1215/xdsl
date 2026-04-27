@@ -1,39 +1,56 @@
+import warnings
+
 from xdsl.ir import Dialect
 
-from . import ops as _ops
-from .ops import *
+from . import ops
+
+
+def __getattr__(name: str):
+    # Check if the requested attribute exists in the new ops module
+    if hasattr(ops, name):
+        warnings.warn(
+            f"Importing '{name}' directly from 'xdsl.dialects.linalg' is deprecated. "
+            f"Please use 'from xdsl.dialects.linalg.ops import {name}' instead.",
+            DeprecationWarning,
+            stacklevel=2,
+        )
+        return getattr(ops, name)
+
+    # If it's not in ops, raise the standard AttributeError
+    raise AttributeError(f"module '{__name__}' has no attribute '{name}'")
+
 
 Linalg = Dialect(
     "linalg",
     [
-        _ops.GenericOp,
-        _ops.YieldOp,
-        _ops.IndexOp,
-        _ops.AddOp,
-        _ops.ExpOp,
-        _ops.LogOp,
-        _ops.SubOp,
-        _ops.SqrtOp,
-        _ops.SelectOp,
-        _ops.FillOp,
-        _ops.CopyOp,
-        _ops.MaxOp,
-        _ops.MinOp,
-        _ops.MulOp,
-        _ops.TransposeOp,
-        _ops.MatmulOp,
-        _ops.QuantizedMatmulOp,
-        _ops.PoolingNchwMaxOp,
-        _ops.Conv2DNchwFchwOp,
-        _ops.Conv2DNhwgcGfhwcOp,
-        _ops.Conv2DNhwc_HwcfOp,
-        _ops.Conv2DNgchwGfchwOp,
-        _ops.Conv2DNgchwFgchwOp,
-        _ops.Conv2DNhwc_FhwcOp,
-        _ops.BroadcastOp,
-        _ops.ReduceOp,
+        ops.GenericOp,
+        ops.YieldOp,
+        ops.IndexOp,
+        ops.AddOp,
+        ops.ExpOp,
+        ops.LogOp,
+        ops.SubOp,
+        ops.SqrtOp,
+        ops.SelectOp,
+        ops.FillOp,
+        ops.CopyOp,
+        ops.MaxOp,
+        ops.MinOp,
+        ops.MulOp,
+        ops.TransposeOp,
+        ops.MatmulOp,
+        ops.QuantizedMatmulOp,
+        ops.PoolingNchwMaxOp,
+        ops.Conv2DNchwFchwOp,
+        ops.Conv2DNhwgcGfhwcOp,
+        ops.Conv2DNhwc_HwcfOp,
+        ops.Conv2DNgchwGfchwOp,
+        ops.Conv2DNgchwFgchwOp,
+        ops.Conv2DNhwc_FhwcOp,
+        ops.BroadcastOp,
+        ops.ReduceOp,
     ],
     [
-        _ops.IteratorTypeAttr,
+        ops.IteratorTypeAttr,
     ],
 )

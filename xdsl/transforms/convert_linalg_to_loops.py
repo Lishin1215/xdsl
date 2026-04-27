@@ -56,7 +56,7 @@ def materialize_loop_bound(
 def create_loop_bounds(
     rewriter: PatternRewriter,
     insertion_point: InsertPoint,
-    op: linalg.LinalgStructuredOperation,
+    op: linalg.ops.LinalgStructuredOperation,
 ) -> Sequence[SSAValue]:
     """
     Build loop upper bounds for a linalg structured operation.
@@ -89,7 +89,7 @@ def create_loop_bounds(
 class LowerLinalgStructuredOpPattern(RewritePattern):
     @op_type_rewrite_pattern
     def match_and_rewrite(
-        self, op: linalg.LinalgStructuredOperation, rewriter: PatternRewriter
+        self, op: linalg.ops.LinalgStructuredOperation, rewriter: PatternRewriter
     ) -> None:
         if op.res:
             raise NotImplementedError(
