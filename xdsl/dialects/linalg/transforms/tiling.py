@@ -2,25 +2,17 @@ from collections.abc import Sequence
 from dataclasses import dataclass
 from typing import cast
 
-from xdsl.context import Context
 from xdsl.dialects import arith, linalg, memref, scf
 from xdsl.dialects.builtin import (
     IndexType,
     IntegerAttr,
     MemRefType,
-    ModuleOp,
     NoneAttr,
     StridedLayoutAttr,
 )
 from xdsl.ir import Attribute, Block, Region, SSAValue
 from xdsl.ir.affine import AffineDimExpr, AffineMap
-from xdsl.passes import ModulePass
-from xdsl.pattern_rewriter import (
-    PatternRewriter,
-    PatternRewriteWalker,
-    RewritePattern,
-    op_type_rewrite_pattern,
-)
+from xdsl.pattern_rewriter import PatternRewriter
 from xdsl.rewriter import InsertPoint
 from xdsl.utils.exceptions import PassFailedException
 from xdsl.utils.hints import isa
@@ -70,7 +62,7 @@ def _normalize_tile_sizes(
 
 
 def _verify_generic_is_tileable(
-    op: linalg.GenericOp,
+    op: linalg.ops.GenericOp,
     tile_sizes: Sequence[int],
     tiled_dims: Sequence[int],
 ) -> tuple[int, ...]:
@@ -86,13 +78,15 @@ def _verify_generic_is_tileable(
             "tiling linalg.generic with tensor results is not supported yet"
         )
 
-    if any(isa(body_op, linalg.IndexOp) for body_op in op.body.walk()):
+    if any(isa(body_op, linalg.ops.IndexOp) for body_op in op.body.walk()):
         raise PassFailedException(
             "tiling linalg.generic using linalg.index is not supported yet"
         )
 
     iterator_types = tuple(iterator.data for iterator in op.get_iterator_types())
-    if any(iterator_types[dim] != linalg.IteratorType.PARALLEL for dim in tiled_dims):
+    if any(
+        iterator_types[dim] != linalg.attrs.IteratorType.PARALLEL for dim in tiled_dims
+    ):
         raise PassFailedException(
             "tiling of non-parallel iterator dimensions is not supported yet"
         )
@@ -177,7 +171,9 @@ def _build_tile_loops(
     return loops, tiled_loop_ivs, current_insertion_point
 
 
-def _build_tiled_subview_type(source_type: MemRefType, result_shape: Sequence[int]):
+def _build_tiled_subview_type(
+    source_type: MemRefType, result_shape: Sequence[int]
+) -> MemRefType:
     """
     Build `the type` for one tiled subview.
     """
@@ -238,24 +234,6 @@ def _build_tiled_subview(
     )
 
 
-def _build_tiled_generic(
-    op: linalg.GenericOp,
-    tiled_operands: Sequence[SSAValue],
-) -> linalg.GenericOp:
-    """
-    Clone the original generic body onto the tiled operands.
-    """
-
-    num_inputs = len(op.inputs)
-    return linalg.GenericOp(
-        tiled_operands[:num_inputs],
-        tiled_operands[num_inputs:],
-        op.body.clone(),
-        op.get_indexing_maps(),
-        op.get_iterator_types(),
-    )
-
-
 def _analyze_operand_tile_info(
     indexing_map: AffineMap,
     source_type: MemRefType[Attribute],
@@ -279,7 +257,7 @@ def _analyze_operand_tile_info(
 
 
 def _analyze_generic_op(
-    op: linalg.GenericOp,
+    op: linalg.ops.GenericOp,
     tile_sizes: tuple[int, ...],
 ) -> TilingPlan:
     """
@@ -325,64 +303,51 @@ def _analyze_generic_op(
     )
 
 
-@dataclass
-class TileLinalgGenericPattern(RewritePattern):
+def tile_linalg_generic(
+    rewriter: PatternRewriter,
+    op: linalg.ops.GenericOp,
+    tile_sizes: tuple[int, ...],
+) -> bool:
     """
     Rewrite supported `linalg.generic` ops into tiled formed.
     """
+    plan = _analyze_generic_op(op, tile_sizes)
+    if not plan.tiled_dims:
+        return False
 
-    tile_sizes: tuple[int, ...]
+    loops, tiled_loop_ivs, inner_ip = _build_tile_loops(
+        rewriter,
+        InsertPoint.before(op),
+        plan.loop_ranges,
+        plan.tile_sizes,
+        plan.tiled_dims,
+    )
+    tiled_subviews: list[memref.SubviewOp] = []
+    tiled_operands: list[SSAValue] = []
 
-    @op_type_rewrite_pattern
-    def match_and_rewrite(self, op: linalg.GenericOp, rewriter: PatternRewriter, /):
-
-        plan = _analyze_generic_op(op, self.tile_sizes)
-
-        if not plan.tiled_dims:
-            return
-
-        loops, tiled_loop_ivs, inner_ip = _build_tile_loops(
-            rewriter,
-            InsertPoint.before(op),
-            plan.loop_ranges,
-            plan.tile_sizes,
-            plan.tiled_dims,
+    for operand, operand_info, indexing_map in zip(
+        op.operands, plan.operand_infos, op.get_indexing_maps(), strict=True
+    ):
+        subview = _build_tiled_subview(
+            operand, indexing_map.data, operand_info, tiled_loop_ivs
         )
-        tiled_subviews: list[memref.SubviewOp] = []
-        tiled_operands: list[SSAValue] = []
+        tiled_subviews.append(subview)
+        tiled_operands.append(subview.result)
 
-        for operand, operand_info, indexing_map in zip(
-            op.operands, plan.operand_infos, op.get_indexing_maps(), strict=True
-        ):
-            subview = _build_tiled_subview(
-                operand, indexing_map.data, operand_info, tiled_loop_ivs
-            )
-            tiled_subviews.append(subview)
-            tiled_operands.append(subview.result)
+    rewriter.insert_op(tiled_subviews, inner_ip)
 
-        rewriter.insert_op(tiled_subviews, inner_ip)
+    num_inputs = len(op.inputs)
+    tiled_generic = linalg.GenericOp(
+        tiled_operands[:num_inputs],
+        tiled_operands[num_inputs:],
+        op.body.clone(),
+        op.get_indexing_maps(),
+        op.get_iterator_types(),
+    )
+    rewriter.insert_op(tiled_generic, InsertPoint.after(tiled_subviews[-1]))
 
-        tiled_generic = _build_tiled_generic(op, tiled_operands)
-        rewriter.insert_op(tiled_generic, InsertPoint.after(tiled_subviews[-1]))
+    for loop in reversed(loops):
+        rewriter.insert_op(scf.YieldOp(), InsertPoint.at_end(loop.body.block))
 
-        for loop in reversed(loops):
-            rewriter.insert_op(scf.YieldOp(), InsertPoint.at_end(loop.body.block))
-
-        rewriter.erase_op(op)
-
-
-@dataclass(frozen=True)
-class LinalgTilingPass(ModulePass):
-    """
-    Tile supported memref-based `linalg.generic` ops.
-    """
-
-    name = "linalg-tiling"
-
-    tile_sizes: tuple[int, ...]
-
-    def apply(self, ctx: Context, op: ModuleOp) -> None:
-        PatternRewriteWalker(
-            TileLinalgGenericPattern(self.tile_sizes),
-            apply_recursively=False,
-        ).rewrite_module(op)
+    rewriter.erase_op(op)
+    return True
