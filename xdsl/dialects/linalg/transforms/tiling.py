@@ -46,19 +46,6 @@ class TilingPlan:
     tile_sizes: tuple[int, ...]
 
 
-def _normalize_tile_sizes(
-    tile_sizes: tuple[int, ...], num_loops: int
-) -> tuple[tuple[int, ...], tuple[int, ...]]:
-    """
-    Pad tile sizes to match the loop count.
-    A tile size of `0` means "do not tile this dimension".
-    """
-
-    normalized = tile_sizes[:num_loops] + (0,) * (num_loops - len(tile_sizes))
-    tiled_dims = tuple(dim for dim, size in enumerate(normalized) if size != 0)
-    return normalized, tiled_dims
-
-
 def _verify_generic_is_tileable(
     op: linalg.ops.GenericOp,
     tile_sizes: Sequence[int],
@@ -170,6 +157,8 @@ def _build_tile_loops(
 
 
 def _build_tiled_subview(
+    rewriter: PatternRewriter,
+    insertion_point: InsertPoint,
     operand: SSAValue,
     indexing_map: AffineMap,
     operand_info: OperandTileInfo,
@@ -204,13 +193,17 @@ def _build_tiled_subview(
     except ValueError as e:
         raise PassFailedException(str(e)) from e
 
-    return memref.SubviewOp.get(
+    subview = memref.SubviewOp.get(
         operand,
         offsets,
         sizes,
         strides,
         result_type,
     )
+
+    rewriter.insert_op(subview, insertion_point)
+
+    return subview
 
 
 def _analyze_operand_tile_info(
@@ -243,8 +236,13 @@ def _analyze_generic_op(
     Analyze one supported `linalg.generic` and returned a `TilingPlan`.
     """
 
-    normalized_tile_sizes, tiled_dims = _normalize_tile_sizes(
-        tile_sizes, op.get_num_loops()
+    num_loops = op.get_num_loops()
+    normalized_tile_sizes = tile_sizes[:num_loops] + (0,) * (
+        num_loops - len(tile_sizes)
+    )
+
+    tiled_dims = tuple(
+        dim for dim, tile_size in enumerate(normalized_tile_sizes) if tile_size != 0
     )
 
     if not tiled_dims:
@@ -308,15 +306,13 @@ def tile_linalg_generic(
         op.operands, plan.operand_infos, op.get_indexing_maps(), strict=True
     ):
         subview = _build_tiled_subview(
-            operand, indexing_map.data, operand_info, tiled_loop_ivs
+            rewriter, inner_ip, operand, indexing_map.data, operand_info, tiled_loop_ivs
         )
         tiled_subviews.append(subview)
         tiled_operands.append(subview.result)
 
-    rewriter.insert_op(tiled_subviews, inner_ip)
-
     num_inputs = len(op.inputs)
-    tiled_generic = linalg.GenericOp(
+    tiled_generic = linalg.ops.GenericOp(
         tiled_operands[:num_inputs],
         tiled_operands[num_inputs:],
         op.body.clone(),
