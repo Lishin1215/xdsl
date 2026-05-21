@@ -7,8 +7,6 @@ from xdsl.dialects.builtin import (
     IndexType,
     IntegerAttr,
     MemRefType,
-    NoneAttr,
-    StridedLayoutAttr,
 )
 from xdsl.ir import Attribute, Block, Region, SSAValue
 from xdsl.ir.affine import AffineDimExpr, AffineMap
@@ -171,36 +169,6 @@ def _build_tile_loops(
     return loops, tiled_loop_ivs, current_insertion_point
 
 
-def _build_tiled_subview_type(
-    source_type: MemRefType, result_shape: Sequence[int]
-) -> MemRefType:
-    """
-    Build `the type` for one tiled subview.
-    """
-
-    layout = source_type.layout
-    if not isinstance(layout, (NoneAttr, StridedLayoutAttr)):
-        raise PassFailedException(
-            f"tiling memrefs with layout {layout} is not supported yet"
-        )
-
-    strides = source_type.get_strides()
-    assert strides is not None
-    if any(stride is None for stride in strides):
-        raise PassFailedException(
-            "tiling memrefs with dynamic strides is not supported yet"
-        )
-
-    layout = StridedLayoutAttr(tuple(strides), None)
-
-    return MemRefType(
-        source_type.element_type,
-        result_shape,
-        layout,
-        source_type.memory_space,
-    )
-
-
 def _build_tiled_subview(
     operand: SSAValue,
     indexing_map: AffineMap,
@@ -225,12 +193,23 @@ def _build_tiled_subview(
             offsets.append(0)
             sizes.append(source_shape[result_index])
 
+    strides = (1,) * len(source_shape)
+    try:
+        result_type = memref.SubviewOp.infer_result_type(
+            operand_info.source_type,
+            offsets,
+            sizes,
+            strides,
+        )
+    except ValueError as e:
+        raise PassFailedException(str(e)) from e
+
     return memref.SubviewOp.get(
         operand,
         offsets,
         sizes,
-        (1,) * len(source_shape),
-        _build_tiled_subview_type(operand_info.source_type, sizes),
+        strides,
+        result_type,
     )
 
 
