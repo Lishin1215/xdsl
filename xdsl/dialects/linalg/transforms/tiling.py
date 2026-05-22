@@ -29,6 +29,28 @@ class OperandTileInfo:
     loop_dims: tuple[int, ...]
     result_shape: tuple[int, ...]
 
+    @staticmethod
+    def analyze(
+        indexing_map: AffineMap,
+        source_type: MemRefType[Attribute],
+        tile_sizes: Sequence[int],
+    ) -> "OperandTileInfo":
+        """
+        Analyze how one operand should be sliced for each tile.
+        """
+
+        source_shape = source_type.get_shape()
+        loop_dims = tuple(
+            cast(AffineDimExpr, expr).position for expr in indexing_map.results
+        )
+        result_shape = tuple(
+            tile_sizes[loop_dim]
+            if tile_sizes[loop_dim] != 0
+            else source_shape[result_index]
+            for result_index, loop_dim in enumerate(loop_dims)
+        )
+        return OperandTileInfo(source_type, loop_dims, result_shape)
+
 
 @dataclass(frozen=True)
 class TilingPlan:
@@ -44,6 +66,60 @@ class TilingPlan:
     tiled_dims: tuple[int, ...]
     operand_infos: tuple[OperandTileInfo, ...]
     tile_sizes: tuple[int, ...]
+
+    @staticmethod
+    def analyze_generic_op(
+        op: linalg.ops.GenericOp,
+        tile_sizes: tuple[int, ...],
+    ) -> "TilingPlan":
+        """
+        Analyze one supported `linalg.generic` and return a `TilingPlan`.
+        """
+
+        num_loops = op.get_num_loops()
+        normalized_tile_sizes = tile_sizes[:num_loops] + (0,) * (
+            num_loops - len(tile_sizes)
+        )
+
+        tiled_dims = tuple(
+            dim for dim, tile_size in enumerate(normalized_tile_sizes) if tile_size != 0
+        )
+
+        if not tiled_dims:
+            return TilingPlan(
+                loop_ranges=(),
+                tiled_dims=(),
+                operand_infos=(),
+                tile_sizes=normalized_tile_sizes,
+            )
+
+        loop_ranges = _verify_generic_is_tileable(
+            op,
+            normalized_tile_sizes,
+            tiled_dims,
+        )
+
+        operand_infos_list: list[OperandTileInfo] = []
+        for operand, indexing_map in zip(
+            op.operands, op.get_indexing_maps(), strict=True
+        ):
+            source_type = operand.type
+            assert isa(source_type, MemRefType)
+            operand_infos_list.append(
+                OperandTileInfo.analyze(
+                    indexing_map.data,
+                    source_type,
+                    normalized_tile_sizes,
+                )
+            )
+        operand_infos = tuple(operand_infos_list)
+
+        return TilingPlan(
+            loop_ranges=loop_ranges,
+            tiled_dims=tiled_dims,
+            operand_infos=operand_infos,
+            tile_sizes=normalized_tile_sizes,
+        )
 
 
 def _verify_generic_is_tileable(
@@ -206,80 +282,6 @@ def _build_tiled_subview(
     return subview
 
 
-def _analyze_operand_tile_info(
-    indexing_map: AffineMap,
-    source_type: MemRefType[Attribute],
-    tile_sizes: Sequence[int],
-) -> OperandTileInfo:
-    """
-    Analyze how one operand should be sliced for each tile, and returned an `OperandTileInfo`.
-    """
-
-    source_shape = source_type.get_shape()
-    loop_dims = tuple(
-        cast(AffineDimExpr, expr).position for expr in indexing_map.results
-    )
-    result_shape = tuple(
-        tile_sizes[loop_dim]
-        if tile_sizes[loop_dim] != 0
-        else source_shape[result_index]
-        for result_index, loop_dim in enumerate(loop_dims)
-    )
-    return OperandTileInfo(source_type, loop_dims, result_shape)
-
-
-def _analyze_generic_op(
-    op: linalg.ops.GenericOp,
-    tile_sizes: tuple[int, ...],
-) -> TilingPlan:
-    """
-    Analyze one supported `linalg.generic` and returned a `TilingPlan`.
-    """
-
-    num_loops = op.get_num_loops()
-    normalized_tile_sizes = tile_sizes[:num_loops] + (0,) * (
-        num_loops - len(tile_sizes)
-    )
-
-    tiled_dims = tuple(
-        dim for dim, tile_size in enumerate(normalized_tile_sizes) if tile_size != 0
-    )
-
-    if not tiled_dims:
-        return TilingPlan(
-            loop_ranges=(),
-            tiled_dims=(),
-            operand_infos=(),
-            tile_sizes=normalized_tile_sizes,
-        )
-
-    loop_ranges = _verify_generic_is_tileable(
-        op,
-        normalized_tile_sizes,
-        tiled_dims,
-    )
-
-    operand_infos_list: list[OperandTileInfo] = []
-    for operand, indexing_map in zip(op.operands, op.get_indexing_maps(), strict=True):
-        source_type = operand.type
-        assert isa(source_type, MemRefType)
-        operand_infos_list.append(
-            _analyze_operand_tile_info(
-                indexing_map.data,
-                source_type,
-                normalized_tile_sizes,
-            )
-        )
-    operand_infos = tuple(operand_infos_list)
-
-    return TilingPlan(
-        loop_ranges=loop_ranges,
-        tiled_dims=tiled_dims,
-        operand_infos=operand_infos,
-        tile_sizes=normalized_tile_sizes,
-    )
-
-
 def tile_linalg_generic(
     rewriter: PatternRewriter,
     op: linalg.ops.GenericOp,
@@ -288,7 +290,7 @@ def tile_linalg_generic(
     """
     Rewrite supported `linalg.generic` ops into tiled formed.
     """
-    plan = _analyze_generic_op(op, tile_sizes)
+    plan = TilingPlan.analyze_generic_op(op, tile_sizes)
     if not plan.tiled_dims:
         return False
 
